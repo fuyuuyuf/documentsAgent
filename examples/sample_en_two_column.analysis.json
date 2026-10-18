@@ -1,0 +1,267 @@
+{
+  "title": "Retrieval-Augmented Question Answering with Evidence-Aware Reranking",
+  "one_sentence_summary": "提出 EARR：用「证据覆盖度控制器」判断已有段落是否够用、据此提前停止检索，在减少约 38% 输入段落的同时把精确匹配提升 3.4–4.1 个点。",
+  "research_problem": {
+    "statement": "检索增强问答的下游阅读器对「段落顺序与冗余度」高度敏感，但现有系统仍把固定数量的检索段落不加区分地送入阅读器，导致重复证据挤占预算、真正缺失的证据反而没有被补上。",
+    "why_it_matters": "多跳问答中单一段落几乎不可能支撑完整答案；若系统只按相关性取前 k 段，预算会浪费在近似重复的段落上，既降低准确率又抬高部署成本。",
+    "evidence": "the downstream reader remains sensitive to the ordering and the redundancy of the passages it receives",
+    "page": 1
+  },
+  "contributions": [
+    {
+      "label": "证据覆盖度控制器",
+      "detail": "为每个候选答案估计「已选段落已经覆盖了多少所需支撑证据」，只有当估计覆盖度低于标定阈值时才继续检索。",
+      "novelty": "把「是否还需要更多证据」做成显式的可估计量并用于提前停止，而不是无条件取满固定数量的段落。",
+      "evidence": "The controller estimates, for each candidate answer, how much of the required supporting evidence is already covered by the selected passages",
+      "page": 1
+    },
+    {
+      "label": "稀疏稠密混合检索",
+      "detail": "把稀疏检索与稠密检索的候选池融合后交给交叉编码器重排，兼顾词面匹配与语义匹配。",
+      "novelty": "把混合检索作为重排与覆盖度控制的统一入口，而不是只用单一检索器。",
+      "evidence": "couples a sparse-dense hybrid retriever with a cross-encoder reranker and an evidence-coverage controller",
+      "page": 1
+    },
+    {
+      "label": "收益归因于去冗余",
+      "detail": "分析表明性能提升主要来自删除近似重复的证据，而不是引入新文档，这对部署成本有直接含义。",
+      "novelty": "把「提分来自去冗余」这一归因明确写出来，据此可直接压缩推理成本而不损失精度。",
+      "evidence": "most of the improvement comes from removing near-duplicate evidence rather than from adding new documents",
+      "page": 1
+    },
+    {
+      "label": "早停对噪声鲁棒",
+      "detail": "实验显示基于覆盖度的早停对检索噪声不敏感，且在多跳问题上收益最大。",
+      "novelty": "说明该机制在「单段落不足」的场景下才真正发挥作用，为适用边界提供了证据。",
+      "evidence": "coverage-based early stopping is robust to retrieval noise and yields the largest gains on multi-hop questions",
+      "page": 1
+    }
+  ],
+  "method": [
+    {
+      "label": "混合候选召回",
+      "detail": "先用稀疏与稠密两路检索各召回候选并融合，候选池上限固定为 120 段以保证延迟可控。",
+      "evidence": "Increasing the fused candidate pool from 60 to 200 passages yields diminishing returns; beyond 120 passages the reranker's recall plateaus",
+      "page": 4
+    },
+    {
+      "label": "交叉编码器重排",
+      "detail": "用交叉编码器对融合后的候选做重排，并在分数中计入对近似重复段落的惩罚。",
+      "evidence": "hybrid retrieval with a standard cross-encoder reranker that has no redundancy penalty and no coverage controller",
+      "page": 3
+    },
+    {
+      "label": "覆盖度当排序信号",
+      "detail": "估计已选段落对答案所需证据的覆盖程度，并把它当作排序信号使用，而不是当作标定过的概率。",
+      "evidence": "We therefore treat the coverage estimate as a ranking signal rather than as a calibrated probability",
+      "page": 2
+    },
+    {
+      "label": "低于阈值再检索",
+      "detail": "仅当估计覆盖度跌破标定阈值时才继续取段落，否则提前停止，从而压低送入阅读器的段落数。",
+      "evidence": "continues retrieving only when the estimated coverage falls below a calibrated threshold",
+      "page": 1
+    }
+  ],
+  "argument_flow": [
+    {
+      "seq": 1,
+      "label": "检索器定义假设空间",
+      "detail": "开篇把检索器从「过滤器」重新定位为「决定阅读器能探索什么」的角色，为后文控制证据集合奠定前提。",
+      "evidence": "the retriever is no longer a mere filter; it defines the hypothesis space that the reader can possibly explore",
+      "page": 1
+    },
+    {
+      "seq": 2,
+      "label": "冗余挤占预算",
+      "detail": "指出当返回的二十段里有十五段是同一内容的改写时，阅读器并不会获得更多信息，反而损失了真正缺失的证据。",
+      "evidence": "A retriever that returns twenty passages of which fifteen are paraphrases of the sa",
+      "page": 1
+    },
+    {
+      "seq": 3,
+      "label": "覆盖度受措辞影响",
+      "detail": "由于覆盖度估计受提示措辞影响、波动可达 4 个点，作者明确不把它当概率做硬阈值决策，只当排序信号。",
+      "evidence": "small changes in the instruction wording shift the measured coverage by up to four points on the multi-hop split",
+      "page": 2
+    },
+    {
+      "seq": 4,
+      "label": "冻结阅读器做归因",
+      "detail": "所有报告数字都使用同一个冻结的阅读器检查点，让对比只反映「证据选择」这一个变量的贡献。",
+      "evidence": "all reported numbers use the same frozen reader checkpoint, so the comparison isolates the contribution of evidence selection alone",
+      "page": 2
+    },
+    {
+      "seq": 5,
+      "label": "消融闭环验证",
+      "detail": "用主实验与消融证明去冗余惩罚和覆盖度控制器各自都有独立贡献。",
+      "evidence": "Removing the redundancy penalty costs 1.9 EM points on HotpotQA and 2.5 points on MuSiQue",
+      "page": 4
+    }
+  ],
+  "evidence_and_results": [
+    {
+      "label": "主结果提升",
+      "detail": "相比最强的混合检索基线，EARR 在 NaturalQuestions 上提升 3.4 个点、在 HotpotQA 上提升 4.1 个点。",
+      "evidence": "EARR improves exact match by 3.4 points on NaturalQuestions and by 4.1 points on HotpotQA over the strongest hybrid baseline",
+      "page": 4
+    },
+    {
+      "label": "输入段落减少 38%",
+      "detail": "送入阅读器的平均段落数从 20 降到 12.4，阅读器输入 token 减少约 38%，成本显著下降。",
+      "evidence": "reducing the average number of passages sent to the reader from 20 to 12.4 and reader input tokens by about 38 percent",
+      "page": 4
+    },
+    {
+      "label": "多跳收益最大",
+      "detail": "在推理链最深的 MuSiQue 上增益最大，与「没有单一段落足够」的假设一致。",
+      "evidence": "The gains are largest on MuSiQue, the benchmark with the deepest reasoning chains",
+      "page": 4
+    },
+    {
+      "label": "去冗余消融",
+      "detail": "去掉冗余惩罚在 HotpotQA 上损失 1.9 个 EM、在 MuSiQue 上损失 2.5 个 EM，但 NaturalQuestions 上只掉 0.7。",
+      "evidence": "Removing the redundancy penalty costs 1.9 EM points on HotpotQA and 2.5 points on MuSiQue, but only 0.7 points on NaturalQuestions",
+      "page": 4
+    },
+    {
+      "label": "覆盖度兼作精度过滤",
+      "detail": "单跳数据上去掉覆盖度控制器的损失比去掉冗余惩罚更大，因为它同时起到「一段已够就早停」的精度过滤作用。",
+      "evidence": "Removing the coverage controller while keeping the reranker costs more on single-hop data than the redundancy penalty does",
+      "page": 4
+    },
+    {
+      "label": "失败案例分析",
+      "detail": "人工检查 HotpotQA 上 100 个失败样本：41 个是覆盖度已超阈值但比较类问题仍未答完，26 个是问题中的实体歧义。",
+      "evidence": "Forty-one involve a coverage estimate that exceeded the threshold while a comparison question remained unanswered; twenty-six involve entity ambiguity in the question",
+      "page": 4
+    }
+  ],
+  "conclusions": [
+    {
+      "label": "早停可直接降本",
+      "detail": "同一套流水线只需下调段落预算即可运行在严格延迟约束下，且不需要重新训练任何组件。",
+      "evidence": "the same pipeline can be operated under a strict latency budget by lowering the passage budget without retraining any component",
+      "page": 3
+    },
+    {
+      "label": "重排与覆盖度单调",
+      "detail": "在 92% 的开发集问题上，重排产生的顺序与覆盖度估计保持单调一致，说明两者并非互相冲突的优化目标。",
+      "evidence": "the ordering produced by the reranker is monotone with respect to the coverage estimate on 92 percent of the development questions",
+      "page": 2
+    }
+  ],
+  "limitations": [
+    {
+      "label": "覆盖度不是概率",
+      "detail": "覆盖度估计受提示措辞影响，在多跳划分上波动可达 4 个百分点，因此不能当作标定概率用于硬阈值决策。",
+      "kind": "方法",
+      "severity": "高",
+      "evidence": "small changes in the instruction wording shift the measured coverage by up to four points on the multi-hop split",
+      "page": 2
+    },
+    {
+      "label": "只评测英文数据",
+      "detail": "全部实验限于英文开放域问答基准，未涉及其他语言，跨语言可用性未知。",
+      "kind": "数据",
+      "severity": "中",
+      "evidence": "We evaluate on NaturalQuestions and TriviaQA (single-hop) and on HotpotQA and MuSiQue (multi-hop)",
+      "page": 3
+    },
+    {
+      "label": "比较型问题仍失败",
+      "detail": "失败分析显示 41% 的错误出现在比较型问题上：覆盖度估计已超阈值，但问题其实尚未答完，说明该指标对多实体对比结构不敏感。",
+      "kind": "方法",
+      "severity": "高",
+      "evidence": "Forty-one involve a coverage estimate that exceeded the threshold while a comparison question remained unanswered",
+      "page": 4
+    },
+    {
+      "label": "验证器接口未验证",
+      "detail": "当下游验证器与生成答案不一致时请求补充证据的接口虽已存在，但作者明确把这一部分留给未来工作，未做实验验证。",
+      "kind": "应用边界",
+      "severity": "中",
+      "evidence": "The same interface also lets a downstream verifier request additional evidence when it disagrees with the generated answer, which we leave to future work",
+      "page": 2
+    },
+    {
+      "label": "实体歧义未处理",
+      "detail": "26% 的失败来自问题中的实体歧义，论文并未提出针对性的消歧机制，只把它列为错误来源。",
+      "kind": "假设",
+      "severity": "中",
+      "evidence": "twenty-six involve entity ambiguity in the question",
+      "page": 4
+    }
+  ],
+  "critique": {
+    "data": "评测集全部是英文开放域问答（NaturalQuestions、TriviaQA、HotpotQA、MuSiQue），没有跨语言或专业领域的验证；同时论文只给出五次运行的中位数与四分位距，没有报告多随机种子下的标准差，跨数据集比较的稳定性无法判断。",
+    "experiment": "基线里缺少与「查询改写 + 上下文压缩」这条主流路线的对比，而这恰恰是「减少送入阅读器 token」最直接的竞争者；此外论文未报告显著性检验，3.4 / 4.1 个点的提升是否超出随机波动没有说明。",
+    "method": "覆盖度估计依赖提示措辞（论文自述波动可达 4 个点），却仍用固定阈值 θ=0.72 触发早停，二者存在张力：作者一边声明「从不把它当硬决策阈值」，一边又在方法描述里用「低于标定阈值就继续检索」作为核心机制，这个内部矛盾没有被正面处理。",
+    "assumption": "核心假设是「答案所需的支撑证据集合可以被逐段估计并求和」，这忽略了证据之间的互补与冲突：两个单独看覆盖度都很低的段落，组合起来才可能构成完整答案，而比较型问题恰恰属于这一类——41% 的失败样本正落在这个假设的盲区上。",
+    "application_boundary": "适合有稳定语料库、对单次查询成本敏感、且能接受少量漏答的检索式问答场景（例如内部知识库助手）；不适合要求高召回的比较类、多跳归因场景，也不适合延迟要求极低、无法承担交叉编码器开销的在线服务。",
+    "overall": "把「该不该继续检索」从工程启发式升级为可估计、可消融的显式信号，并诚实地把收益归因到去冗余而非加文档，是这篇论文最有价值的两点。但最需要警惕的是：作者一边承认覆盖度不是标定概率，一边又用它配合固定阈值决定是否早停——这个张力直接体现为 41% 的比较型问题失败，因此它更像是「一个有效的排序信号」，而不是「一个可靠的停止判据」。"
+  },
+  "glossary": [
+    {
+      "term": "检索增强生成",
+      "plain": "它是指让模型回答问题前，先去外部资料库把相关段落检索出来，再把段落和问题一起交给模型生成答案，相当于开卷考试而不是闭卷默写，模型才可能答对参数里没有记住的专业问题。",
+      "analogy": "像写论文先去图书馆翻参考文献再动笔，而不是凭记忆硬写，写出的每句话都有出处可查。",
+      "why_it_matters": "它是本文整套方法的出发点：覆盖度控制器与重排器都建立在「先检索到证据再回答」这条流水线上。",
+      "evidence": "Open-domain question answering (QA) systems increasingly rely on a retrieval component that supplies evidence to a large language model (LLM)",
+      "page": 1
+    },
+    {
+      "term": "交叉编码器",
+      "plain": "它是指把问题和候选段落拼成一对、整体送进模型打分的重排模型：与两边分开编码再算相似度的双塔结构不同，它能逐词交叉比对问题与段落的语义关联，代价是计算量明显更大。",
+      "analogy": "像面试时把简历和岗位要求并排放在一起逐条比对再打分，而不是各看各的、最后把两个分数相加。",
+      "why_it_matters": "它是本文重排段落的核心部件，也是整条流水线延迟与成本的主要来源，减少送入它的段落数就能直接省钱。",
+      "evidence": "hybrid retrieval with a standard cross-encoder reranker that has no redundancy penalty",
+      "page": 3
+    },
+    {
+      "term": "证据覆盖度",
+      "plain": "它是指对某个候选答案估计「已选中的这些段落一共覆盖了多少所需的支撑证据」：把每段对回答该问题的贡献累加起来得到一个分数，分数够高说明资料已经够用，可以停止继续检索，不够再定向补查。",
+      "analogy": "像考前对照考纲清点复习资料：关键知识点都齐了就停手，缺哪一块再专门去找哪一块，不做重复功。",
+      "why_it_matters": "它是本文提出的核心信号：只有当估计覆盖度跌破标定阈值时才继续检索，从而砍掉近四成冗余的输入段落。",
+      "evidence": "how much of the required supporting evidence is already covered by the selected passages",
+      "page": 1
+    },
+    {
+      "term": "多跳问答",
+      "plain": "它是指答案无法从任何单一段落直接读出、必须把多篇文档的信息串成推理链才能得到的问答任务：比如先查某部电影的导演，再查这位导演的另一部作品，两步缺一不可，对检索系统考验更严苛。",
+      "analogy": "像做连环追问的采访：先问出某位教授的导师是谁，再去查这位导师带过哪些学生，一步卡住整题卡住。",
+      "why_it_matters": "单一段落几乎不够用的场景正是本文方法的用武之地，实验里最大的增益也正出现在这类多跳问题上。",
+      "evidence": "yields the largest gains on multi-hop questions, where a single passage is rarely sufficient",
+      "page": 1
+    },
+    {
+      "term": "精确匹配",
+      "plain": "它是最严格的问答评分指标：模型输出的答案必须与标准答案逐字完全一致才算对，差一个同义替换都不给分，因此分数偏低但几乎没有注水空间，常与更宽松的 F1 指标一起报告互为参照。",
+      "analogy": "像填空题的机器改卷：标准答案是「1949 年」，答「建国那年」意思对了也算错，一个字都不能差。",
+      "why_it_matters": "它是本文报告的主要指标：输入段落减少约 38% 的同时精确匹配反而提升 3.4 至 4.1 个点，说明去冗余没有丢信息。",
+      "evidence": "We report exact match (EM) and token-level F1",
+      "page": 3
+    },
+    {
+      "term": "消融实验",
+      "plain": "它是指把方法里的某个部件拆掉后再跑一遍完整实验，用前后成绩之差来证明这个部件确实有贡献：本文分别去掉冗余惩罚与覆盖度控制器各测一轮，两者都让成绩明显下滑，说明这两个设计缺一不可。",
+      "analogy": "像把自行车的刹车拆掉再骑一圈：平路上速度也许看不出变化，但一遇到下坡立刻知道刹车有多重要。",
+      "why_it_matters": "本文靠它把提升归因到「删除近似重复证据」而不是引入新文档，这一归因直接支撑了降本的主张。",
+      "evidence": "Removing the coverage controller while keeping the reranker costs more on single-hop data",
+      "page": 4
+    }
+  ],
+  "open_questions": [
+    "覆盖度估计受提示措辞影响可达 4 个点，能否用少量标定样本把它变成真正的概率并支持硬阈值？",
+    "比较型问题的 41% 失败是否源于「逐段覆盖度可加」这个假设本身？需要怎样的结构建模才能覆盖互补证据？",
+    "在保持精确匹配的前提下，把交叉编码器的延迟压回基线的 1.2 倍以内是否可行？"
+  ],
+  "reading_path": [
+    "先读摘要，抓住「减少冗余证据同时提分」这一核心主张",
+    "读第 1 节，理解检索器如何被重新定位为「定义假设空间」的角色",
+    "读第 3 节的覆盖度估计与早停设计，注意作者为什么强调它不是标定概率",
+    "读第 4 节的表 1 与消融，确认去冗余与覆盖度控制各自的独立贡献",
+    "最后读错误分析中的比较型问题失败，判断该方法的适用边界"
+  ]
+}

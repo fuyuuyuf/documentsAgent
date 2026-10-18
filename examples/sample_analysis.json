@@ -1,0 +1,225 @@
+{
+  "title": "Retrieval-Augmented Generation with Adaptive Evidence Selection for Scientific Question Answering",
+  "one_sentence_summary": "提出 AES-RAG：用可学习的证据打分器从检索结果中筛选高价值片段，使科学问答的事实准确率提升 6.4 个百分点并显著降低幻觉率。",
+  "research_problem": {
+    "statement": "现有检索增强问答把检索到的全部段落直接塞进上下文，噪声片段会淹没关键证据，导致大模型在科学问答中给出看似合理但缺乏依据的答案。",
+    "why_it_matters": "科学问答对事实准确性要求极高，而当前检索器追求召回率、生成器又无法分辨段落可信度，噪声与关键证据混杂是幻觉的主要来源之一。",
+    "evidence": "retrieved passages are concatenated without discrimination, which allows noisy context to dominate the generation",
+    "page": 2
+  },
+  "contributions": [
+    {
+      "label": "自适应证据打分器",
+      "detail": "训练一个轻量交叉编码器，对每个检索片段打「对当前问题的证据价值」分，只把 top-k 片段送入生成器。",
+      "novelty": "与固定 top-k 截断不同，打分器直接以「答案是否可被该片段支撑」为监督信号，而不是以检索相关性为目标。",
+      "evidence": "we train a lightweight cross-encoder that scores each passage by its evidential value to the question",
+      "page": 3
+    },
+    {
+      "label": "证据覆盖度约束",
+      "detail": "在选择片段时加入覆盖度正则项，避免所有入选片段都来自同一篇参考文献而漏掉互补证据。",
+      "novelty": "把「证据多样性」显式写成可微损失，而不是事后用启发式去重。",
+      "evidence": "a coverage regularizer discourages selecting multiple passages from the same source document",
+      "page": 4
+    },
+    {
+      "label": "幻觉率评测协议",
+      "detail": "提出按「答案句子能否被所选证据逐句支撑」计算幻觉率的自动评测协议，并人工校验了一致性。",
+      "novelty": "把幻觉从整体打分拆解到句子级归因，能区分「答错」与「答对但无依据」。",
+      "evidence": "we report a sentence-level hallucination rate that checks whether each answer claim is entailed by the selected evidence",
+      "page": 5
+    }
+  ],
+  "method": [
+    {
+      "label": "双塔召回",
+      "detail": "用稠密检索器从科学文献库召回 100 个候选片段，保证召回率上限不成为瓶颈。",
+      "evidence": "a dense retriever first recalls one hundred candidate passages per question",
+      "page": 3
+    },
+    {
+      "label": "交叉编码打分",
+      "detail": "把「问题 + 片段」拼接后送入交叉编码器，输出 0-1 的证据价值分数。",
+      "evidence": "the question and passage are concatenated and fed to a cross-encoder that outputs a scalar evidential score",
+      "page": 3
+    },
+    {
+      "label": "覆盖度重排",
+      "detail": "在分数基础上减去来源重复惩罚，选出 5 个互补片段作为最终上下文。",
+      "evidence": "we subtract a redundancy penalty when a candidate comes from a source already selected",
+      "page": 4
+    },
+    {
+      "label": "受限生成",
+      "detail": "生成阶段要求模型为每个答案句子标注所用证据编号，便于事后归因与拒答。",
+      "evidence": "the generator must cite the identifier of the evidence supporting each sentence it produces",
+      "page": 4
+    }
+  ],
+  "argument_flow": [
+    {
+      "seq": 1,
+      "label": "噪声致幻",
+      "detail": "先论证检索噪声是幻觉的重要来源，为后续「筛选证据」的动机奠基。",
+      "evidence": "noise in the retrieved context is a primary driver of unfaithful answers",
+      "page": 1
+    },
+    {
+      "seq": 2,
+      "label": "相关性不等于证据性",
+      "detail": "关键转折：指出检索相关性高并不意味着该片段能支撑答案，因此需要独立的证据价值信号。",
+      "evidence": "topical relevance does not imply that a passage can actually support the answer",
+      "page": 2
+    },
+    {
+      "seq": 3,
+      "label": "可学习筛选",
+      "detail": "由此推出用可学习打分器替代固定截断的方案，并给出监督信号的构造方式。",
+      "evidence": "we therefore replace fixed truncation with a learned evidential scorer",
+      "page": 3
+    },
+    {
+      "seq": 4,
+      "label": "实验闭环",
+      "detail": "通过主实验 + 消融 + 句子级幻觉率，验证筛选机制同时提升准确率与可归因性。",
+      "evidence": "ablating the scorer reduces factual accuracy by 4.1 points",
+      "page": 6
+    }
+  ],
+  "evidence_and_results": [
+    {
+      "label": "主实验结果",
+      "detail": "在三个科学问答数据集上平均事实准确率 71.3%，比最强基线 RAG-top5 高 6.4 个百分点。",
+      "evidence": "AES-RAG reaches 71.3 percent average factual accuracy, 6.4 points above the strongest baseline",
+      "page": 6
+    },
+    {
+      "label": "幻觉率下降",
+      "detail": "句子级幻觉率从基线的 18.7% 降到 9.2%，说明增益不只是「答得更准」而是「更有依据」。",
+      "evidence": "the sentence-level hallucination rate drops from 18.7 percent to 9.2 percent",
+      "page": 7
+    },
+    {
+      "label": "消融验证",
+      "detail": "去掉证据打分器后准确率下降 4.1 分，去掉覆盖度正则下降 1.8 分，两个组件都有独立贡献。",
+      "evidence": "removing the coverage regularizer costs 1.8 points",
+      "page": 7
+    },
+    {
+      "label": "效率代价",
+      "detail": "交叉编码器带来约 2.3 倍延迟增长，作者称可通过缓存与蒸馏缓解但未给出实测数据。",
+      "evidence": "the cross-encoder increases end-to-end latency by roughly 2.3 times",
+      "page": 8
+    }
+  ],
+  "conclusions": [
+    {
+      "label": "筛选优于堆叠",
+      "detail": "在科学问答中，精选少量高证据价值片段比堆叠更多上下文更有效。",
+      "evidence": "selecting fewer but more evidential passages outperforms simply adding more context",
+      "page": 8
+    },
+    {
+      "label": "可归因生成",
+      "detail": "要求生成器显式引用证据编号，使答案可逐句回溯，为拒答与人工复核提供接口。",
+      "evidence": "explicit citation of evidence identifiers makes every answer sentence traceable",
+      "page": 8
+    }
+  ],
+  "limitations": [
+    {
+      "label": "延迟代价偏高",
+      "detail": "交叉编码器使端到端延迟增至约 2.3 倍，论文只提出缓存与蒸馏作为缓解方向，未给出实测结果。",
+      "kind": "方法",
+      "severity": "高",
+      "evidence": "we leave latency reduction through caching and distillation to future work",
+      "page": 9
+    },
+    {
+      "label": "评测域单一",
+      "detail": "三个数据集都来自英文学术问答，未验证跨语言与开放域场景，结论外推需谨慎。",
+      "kind": "数据",
+      "severity": "中",
+      "evidence": "all three benchmarks are English scientific question answering datasets",
+      "page": 9
+    },
+    {
+      "label": "打分器依赖标注",
+      "detail": "证据价值监督信号来自人工标注的答案-片段支撑关系，标注成本随领域迁移而重复发生。",
+      "kind": "数据",
+      "severity": "中",
+      "evidence": "the evidential labels are collected by human annotators for each domain",
+      "page": 9
+    },
+    {
+      "label": "幻觉率是自动指标",
+      "detail": "句子级幻觉率由蕴含模型自动判定，论文仅抽样 200 条做人工一致性检查，存在系统性偏差风险。",
+      "kind": "实验",
+      "severity": "中",
+      "evidence": "we manually verify two hundred sampled predictions for consistency",
+      "page": 9
+    }
+  ],
+  "critique": {
+    "data": "三个评测集均为英文学术问答，且作者未报告各数据集上的方差或多随机种子结果；证据价值标注的标注者间一致性（IAA）只在附录给出单一数值，未按领域拆分，无法判断跨领域迁移时的标注可靠性。",
+    "experiment": "基线只对比了固定 top-k 截断与重排方法，缺少与「查询改写 + 上下文压缩」这一主流路线的对比；同时没有报告统计显著性检验，6.4 个百分点的提升幅度在不同数据集上的波动范围未知。",
+    "method": "证据价值打分器把「片段能否支撑答案」当作可独立学习的属性，但该属性实际上依赖生成器能力——换一个更强的生成器，最优证据集合可能不同。因此打分器与生成器应当联合优化，论文却采用两阶段分离训练，存在次优风险。",
+    "assumption": "核心假设是「存在一组固定大小的最优证据片段，且其价值可由问题与片段本身决定」。这忽略了多跳问答中证据之间的互补与冲突关系：两个单独看都低分的片段，组合起来可能是唯一完整答案。",
+    "application_boundary": "适合有稳定语料库、对延迟不敏感、且要求答案可审计的场景（如科研文献助手、合规审阅）；不适合低延迟在线问答，也不适合语料高频更新的场景，因为打分器需要针对新领域重新标注与训练。",
+    "overall": "把「相关性」与「证据性」明确区分开来，是这篇论文最有价值的概念贡献，句子级幻觉率指标也比单一准确率更能反映真实可用性。但最值得警惕的一点是：论文报告的 6.4 分提升建立在自己构造的证据标注之上，而该标注本身依赖作者的判据，缺少独立第三方复现，因此这一增益的更准确表述应是「在该标注体系下的增益」。"
+  },
+  "glossary": [
+    {
+      "term": "检索增强生成",
+      "plain": "它是指大模型回答问题前，先让程序去资料库里把相关材料查出来，再让模型看着这些材料作答，而不是只靠训练时记住的内容硬答。相当于把闭卷考试改成开卷考试：答案有据可查，不容易凭空出错。",
+      "analogy": "像写综述时先翻参考文献再动笔，而不是闭卷默写——写错了至少能翻回原文核对。",
+      "why_it_matters": "它是本文方法的地基：AES-RAG 的全部设计都围绕「查到的材料噪声大」这个痛点展开，没有检索就谈不上筛选证据。",
+      "evidence": "retrieval-augmented generation grounds generation in retrieved evidence",
+      "page": 1
+    },
+    {
+      "term": "交叉编码器",
+      "plain": "它是一种把「问题」和「候选段落」拼在一起、整体读一遍再打分的模型。因为两段文字互相看得见，判断一段话到底能不能支撑答案时更准；代价是每一对都要重新算一遍，速度比分开编码慢得多。",
+      "analogy": "像面试官把简历和岗位要求并排逐条比对再打分，而不是两份材料各自打分后简单相加。",
+      "why_it_matters": "它是本文证据打分器的核心部件，决定选出的片段质量；论文里 2.3 倍的延迟代价也主要来自它。",
+      "evidence": "a cross-encoder reads the question and passage jointly",
+      "page": 3
+    },
+    {
+      "term": "幻觉",
+      "plain": "它是指大模型一本正经地给出答案，但答案在原文或事实里找不到依据，甚至是编造出来的。表面读起来通顺专业，深究却站不住脚，是检索增强问答里最受诟病的失败模式。",
+      "analogy": "像考试时不会做却硬编出一个格式漂亮、术语齐全的答案，阅卷人一眼就能看出是蒙的。",
+      "why_it_matters": "它是本文要正面解决的问题：句子级幻觉率从 18.7% 降到 9.2%，是论文最硬的成绩单。",
+      "evidence": "unfaithful answers that are not supported by any retrieved evidence",
+      "page": 2
+    },
+    {
+      "term": "证据溯源",
+      "plain": "它是指给答案的每一句话都标注「这句话依据的是哪段材料」，让读者能顺着编号回查原文核对。答案不再是一整团黑箱文字，而是一句一句都能追查来源的链条，错了能定位、对了能复查。",
+      "analogy": "像新闻报道里给每句话标「消息来源」，读者想核实随时能点开原始出处对照。",
+      "why_it_matters": "它是本文提升答案可信度的关键机制：生成器必须标注证据编号，也让拒答与人工复核有了抓手。",
+      "evidence": "each answer sentence must cite the evidence that supports it",
+      "page": 4
+    },
+    {
+      "term": "消融实验",
+      "plain": "它是指把方法里的某个零件拆掉再跑一遍实验，看成绩掉多少，用差值证明这个零件真的有贡献。如果拆掉某个组件后成绩纹丝不动，说明它其实是多余的，可以放心删掉。",
+      "analogy": "像把自行车的刹车拆掉再骑一圈：速度也许没慢多少，但下坡时问题立刻暴露。",
+      "why_it_matters": "本文靠它分别量化了证据打分器（-4.1 分）与覆盖度正则（-1.8 分）的贡献，证明两个组件都不是摆设。",
+      "evidence": "we ablate each component to isolate its contribution",
+      "page": 7
+    }
+  ],
+  "open_questions": [
+    "证据价值打分器与生成器联合训练，能否突破两阶段分离带来的次优上限？",
+    "多跳问答中互补证据的组合价值如何建模——低分片段的组合可能是唯一完整答案？",
+    "延迟代价能否在保持准确率的前提下压回基线的 1.2 倍以内？"
+  ],
+  "reading_path": [
+    "先读摘要与第 1 节，抓住「相关性不等于证据性」这一核心动机",
+    "读第 3 节看证据打分器与覆盖度正则的具体设计",
+    "读第 4 节的消融实验，确认两个组件各自的贡献",
+    "读第 6 节局限与附录的标注一致性，判断结论的外推边界",
+    "最后回到第 2 节相关工作，对比它与上下文压缩路线的差异"
+  ]
+}
