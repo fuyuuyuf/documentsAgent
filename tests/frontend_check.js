@@ -283,6 +283,13 @@ function finish() {
     `已绑定 ${boundNodes.length}/${nodeGroups.length}`
   );
   check('节点绑定比例 > 80%', nodeGroups.length > 0 && boundNodes.length / nodeGroups.length > 0.8);
+  // securityLevel=strict 下，标签里的 <br/> 必须仍按换行渲染；一旦哪版 mermaid
+  // 把它转义成字面文本，长标签会挤成一行（纯视觉回归，其他断言抓不到）。
+  const nodeList = Array.from(nodeGroups);
+  const literalBr = nodeList.filter((g) => /<br\s*\/?>/i.test(g.textContent || '')).length;
+  const wrappedNodes = nodeList.filter((g) => g.querySelectorAll('tspan').length >= 2).length;
+  check('标签中的 <br/> 未被转义成字面文本', literalBr === 0, `含字面 <br> 的节点 ${literalBr} 个`);
+  check('长标签仍按多行渲染（strict 模式兼容）', wrappedNodes > 0, `多行节点 ${wrappedNodes} 个`);
   check('图例已生成', legendItems.length > 0, `items=${legendItems.length}`);
   check('Mermaid 源码视图已填充', !!sourceView && sourceView.textContent.indexOf('flowchart') >= 0);
   check('概览面板已填充', !!sideBody && sideBody.innerHTML.length > 100);

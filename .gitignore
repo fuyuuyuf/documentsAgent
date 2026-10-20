@@ -26,11 +26,16 @@ outputs/_uploads/
 # 保留示例看板与占位文件，保证仓库克隆后 outputs/ 存在
 !outputs/.gitkeep
 !outputs/README.md
+# 评审要求随包提供可离线打开的示例看板（tests/preflight_check.py 会逐份校验）
+!outputs/sample_*.dashboard.html
 
 # ---------------------------------------------------------------------------
 # 验证与临时目录
 # ---------------------------------------------------------------------------
-_verify/
+# 前端无头验证目录：node_modules 不入库，但 package.json 必须入库
+# （tests/run_all_tests.py 会据此自动 npm install jsdom）
+_verify/*
+!_verify/package.json
 .tmp_docx/
 tmp/
 *.log

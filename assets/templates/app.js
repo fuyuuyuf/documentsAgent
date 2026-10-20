@@ -167,7 +167,9 @@
     }
     try {
       window.mermaid.initialize({
-        startOnLoad: false, securityLevel: 'loose', fontFamily: FONT_STACK, themeVariables: vars,
+        // strict：由 mermaid 自身再净化一次标签文本（纵深防御）；节点标签本就是
+        // Python 侧 sanitize_label 清洗过的纯文本 + <br/>，strict 不影响折行。
+        startOnLoad: false, securityLevel: 'strict', fontFamily: FONT_STACK, themeVariables: vars,
         theme: 'base',                                        // 两种模式共用可控主题变量，避免默认暗色灰阶覆盖
         // 紧凑布局：间距 / 内边距整体调小（标签换行由 Python 端负责，前端不改写标签）
         flowchart: { htmlLabels: false, curve: 'basis', nodeSpacing: 34, rankSpacing: 56, useMaxWidth: false, padding: 10 } });

@@ -341,7 +341,9 @@ def test_real_two_column_fixture(tmp: Path) -> None:
     paper = _parse(PROJECT_ROOT / "examples" / "sample_en_two_column.pdf")
     flat = re.sub(r"\s+", " ", paper.full_text)
     checks = [
-        ("标题两段相邻", "Evidence-Aware Reranking" in flat.replace("with ", "with ")),
+        ("标题被还原成完整一句",
+         paper.title == "Retrieval-Augmented Question Answering with Evidence-Aware Reranking"),
+        ("标题两段在正文中相邻", "Evidence-Aware Reranking" in flat),
         ("摘要在引言之前", flat.find("Open-domain question answering (QA) systems increasingly rely")
         < flat.find("1 Introduction") if "1 Introduction" in flat else False),
     ]

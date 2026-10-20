@@ -249,7 +249,7 @@ def parse_pdf(pdf_path: str | Path, settings: Settings | None = None) -> PaperTe
     two_column_pages = _detect_two_column(pages)
     abstract = _detect_abstract(pages)
 
-    body_pages, page_texts, full_text, page_spans = _assemble(pages)
+    body_pages, page_texts, full_text, page_spans, assemble_stats = _assemble(pages)
 
     dropped = sorted({b.text.strip() for p in pages for b in p.blocks if b.is_boilerplate and b.text.strip()})
     paper = PaperText(
@@ -269,8 +269,10 @@ def parse_pdf(pdf_path: str | Path, settings: Settings | None = None) -> PaperTe
             "body_chars": len(full_text),
             "raw_chars": sum(len(p.raw_text) for p in pages),
             "boilerplate_blocks": sum(1 for p in pages for b in p.blocks if b.is_boilerplate),
-            "boilerplate_lines": _assemble_stats.get("boilerplate_lines", 0),
-            "stripped_lines": _assemble_stats.get("dropped_lines", 0),
+            "boilerplate_lines": assemble_stats["boilerplate_lines"],
+            "stripped_lines": assemble_stats["dropped_lines"],
+            "truncated_from": assemble_stats["truncated_from"],
+            "truncated_pages": assemble_stats["truncated_pages"],
             "headings": len(_collect_headings(pages)),
             "reordered_pages": reordered_pages,
         },
@@ -900,9 +902,39 @@ def _looks_like_numbered_heading(text: str) -> bool:
     return True
 
 
+def _looks_like_title_text(text: str) -> bool:
+    """标题的"语言学"守卫：排除公式碎片与图表坐标轴标注。
+
+    真实踩到的两类误判（用论文实测发现）：
+      * 数学论文里的行内公式被单独成块（``t)|0 ≤l ≤ai −1, 1 ≤t ≤m −n}.``），
+        这类块字号常常大于正文，纯几何规则（字号/居中/加粗）判不出来；
+      * 图表坐标轴刻度（``1.0`` / ``0.8`` / ``100 101``）同样"字号偏大、居中"，
+        一篇 28 页的 arXiv 论文曾因此产出 167 个"标题"，其中 141 个是刻度。
+
+    二者的共同点是**字母占比极低**或**括号不配平**，而真正的章节标题几乎不可能
+    满足这两条（中英文标题的字母/汉字占比都很高）。
+    """
+    letters = sum(1 for ch in text if ch.isalpha())
+    visible = sum(1 for ch in text if not ch.isspace())
+    if visible < 2 or letters < 2:
+        return False
+    if letters / visible < 0.5:
+        return False
+    # 图表坐标轴刻度常写成"20 30 50 80 100 Number of nodes"：多个纯数字 token
+    # 说明这是刻度而不是标题（"1. Introduction" 的 "1."、"GPT-4" 都不算纯数字）。
+    if sum(1 for token in text.split() if re.fullmatch(r"\d+(?:\.\d+)?", token)) >= 2:
+        return False
+    for opener, closer in (("(", ")"), ("[", "]"), ("{", "}")):
+        if text.count(opener) != text.count(closer):
+            return False
+    return True
+
+
 def _classify_heading(block: Block, body_size: float, max_size: float, page_width: float) -> tuple[bool, int]:
     text = normalize(block.text)
     if not text or len(text) > 120:
+        return False, 0
+    if not _looks_like_title_text(text):
         return False, 0
     words = text.split()
     stripped = text.rstrip(" .:：")
@@ -1078,10 +1110,6 @@ def _collect_headings(pages: list[Page]) -> list[Heading]:
 # ---------------------------------------------------------------------------
 # 正文装配
 # ---------------------------------------------------------------------------
-# _assemble 的辅助统计（避免为两个次要计数改动函数签名）
-_assemble_stats: dict[str, int] = {"dropped_lines": 0, "boilerplate_lines": 0}
-
-
 def _collect_boilerplate_lines(pages: list[Page]) -> set[str]:
     """识别**行级**跨页重复内容（页眉/页脚常常和正文挤在同一个块里）。
 
@@ -1122,12 +1150,20 @@ def _strip_boilerplate_lines(text: str, boilerplate_lines: set[str]) -> str:
     return "\n".join(kept)
 
 
-def _assemble(pages: list[Page]) -> tuple[list[int], list[str], str, list[tuple[int, int]]]:
-    """拼接正文，返回 (正文页码, 每页正文, 全文, 每页字符区间)。"""
+def _assemble(
+    pages: list[Page],
+) -> tuple[list[int], list[str], str, list[tuple[int, int]], dict[str, int | None]]:
+    """拼接正文，返回 (正文页码, 每页正文, 全文, 每页字符区间, 统计)。
+
+    ``统计`` 里带 ``truncated_from`` / ``truncated_pages``：正文在参考文献或
+    附录处截断时，把"从第几页起没有被分析"如实暴露给上层。arXiv 论文常把
+    附录放在参考文献之后，若不暴露这个数字，用户会以为 28 页都被读过了。
+    """
     page_texts = ["" for _ in pages]
     body_pages: list[int] = []
     current_section = ""
     stopped = False
+    stopped_at_page: int | None = None
     dropped_lines = 0
     boilerplate_lines = _collect_boilerplate_lines(pages)
 
@@ -1151,6 +1187,8 @@ def _assemble(pages: list[Page]) -> tuple[list[int], list[str], str, list[tuple[
                     # 并让后续页面整体跳过，而**不是**跳出整个循环——
                     # 否则"参考文献紧跟在正文末尾页之前"会把后面所有正文都丢掉。
                     stopped = True
+                    if stopped_at_page is None:
+                        stopped_at_page = page.number
                     break
                 current_section = text
                 block.section = current_section
@@ -1164,8 +1202,22 @@ def _assemble(pages: list[Page]) -> tuple[list[int], list[str], str, list[tuple[
         if joined:
             body_pages.append(page.number)
 
-    _assemble_stats["dropped_lines"] = dropped_lines
-    _assemble_stats["boilerplate_lines"] = len(boilerplate_lines)
+    # 统计"没被分析的页"：截断点之后正文为空的页。
+    # 不用 ``总页数 - 截断页 + 1`` 估算：截断页本身可能已经贡献了内容
+    # （例如参考文献排在正文最后一页的下半部分），那样会虚报漏读页数。
+    unanalyzed_pages = [
+        page.number
+        for page in pages
+        if stopped_at_page is not None
+        and page.number >= stopped_at_page
+        and not page_texts[page.number - 1]
+    ]
+    assemble_stats: dict[str, int | None] = {
+        "dropped_lines": dropped_lines,
+        "boilerplate_lines": len(boilerplate_lines),
+        "truncated_from": unanalyzed_pages[0] if unanalyzed_pages else None,
+        "truncated_pages": len(unanalyzed_pages),
+    }
 
     # 只保留真正有内容的页，保证 body_pages 与 page_spans 一一对应
     kept_pages = [p for p in body_pages if page_texts[p - 1]]
@@ -1180,7 +1232,7 @@ def _assemble(pages: list[Page]) -> tuple[list[int], list[str], str, list[tuple[
         page_spans.append((cursor, cursor + len(text)))
         cursor += len(text)
     full_text = "\n\n".join(parts).strip()
-    return kept_pages, page_texts, full_text, page_spans
+    return kept_pages, page_texts, full_text, page_spans, assemble_stats
 
 
 def _check_quality(paper: PaperText, settings: Settings) -> None:
@@ -1203,3 +1255,10 @@ def _check_quality(paper: PaperText, settings: Settings) -> None:
     raw_chars = paper.stats.get("raw_chars", 0)
     if raw_chars and paper.char_count > raw_chars * 1.05:
         warn.append("正文长度超过原始提取长度，可能存在重复内容，请检查。")
+    truncated = int(paper.stats.get("truncated_pages") or 0)
+    if truncated:
+        warn.append(
+            f"正文在参考文献/附录处截断：第 {int(paper.stats.get('truncated_from') or 0)} 页起共 "
+            f"{truncated} 页未参与分析。这是为了避免参考文献污染分析；若论文的附录排在"
+            "参考文献之后（arXiv 常见），附录内容不会进入看板。"
+        )

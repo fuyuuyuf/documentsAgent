@@ -31,7 +31,7 @@ from src.parse import PaperText  # noqa: E402
 from src.prompts import validate_analysis  # noqa: E402
 from src.render import build_payload, render_html  # noqa: E402
 from src.textutils import CitationVerifier, collapse_for_search, normalize  # noqa: E402
-from src.webapp import PAGE_TEMPLATE, _parse_multipart, _safe_filename, _truthy  # noqa: E402
+from src.webapp import _parse_multipart, _safe_filename, _truthy  # noqa: E402
 
 PASSED: list[str] = []
 FAILED: list[str] = []
@@ -108,6 +108,22 @@ def test_citation_verifier() -> None:
 
     squashed = verifier.verify("fails on scanned  documents\nwithout a text layer", 3)
     check("空白差异仍能命中", squashed["found"] is True, str(squashed))
+
+    # 中文：分句被轻微改写时，k-mer 覆盖率兜底仍应定位到（method=overlap）；
+    # 编造内容必须仍然判为未定位（阈值不能被放宽成"随便沾点边就算命中"）。
+    zh_page1 = "海域立体分层设权本质上是海域使用权制度从二维向三维的演进过程。"
+    zh_page2 = "北海海区养殖用海模式的转型发展，为立体分层设权制度的实践落地搭建了试验平台。"
+    zh_full = f"{zh_page1}\n\n{zh_page2}"
+    zh_spans = [(0, len(zh_page1)), (len(zh_page1) + 2, len(zh_full))]
+    zh_verifier = CitationVerifier(zh_full, zh_spans)
+    modified = zh_verifier.verify("本文认为海域立体分层设权本质上是海域使用权制度从二维向三维的演进过程", None)
+    check(
+        "中文轻微改写仍能定位（overlap 兜底）",
+        modified["found"] and modified["page"] == 1 and modified["method"] == "overlap",
+        str(modified),
+    )
+    invented = zh_verifier.verify("本文采用量子纠缠方法对北海海区养殖用海进行了三维重建并获得国家科技进步特等奖", None)
+    check("中文编造引用仍判为未定位", invented["found"] is False, str(invented))
 
     # 简要上下文：window() 与 verify() 同策略定位，返回命中前后各一段原文
     ctx = verifier.window("Accuracy reaches 92.4 percent")
@@ -191,7 +207,12 @@ def test_payload_and_escape() -> None:
     check("样例分析生成的 Mermaid 合法", validation.ok is True, str(validation.errors))
 
     payload = build_payload(analysis, diagram, source_name="x.pdf", validation=validation, mermaid_source=code)
-    check("节点数 = 图节点数", payload["stats"]["nodeCount"] == len(diagram.nodes) - 1 + 1 - 1 + 1 or payload["stats"]["nodeCount"] > 0)
+    root_nodes = sum(1 for node in diagram.nodes if node.section == "root")
+    check(
+        "节点数 = 非根图节点数",
+        payload["stats"]["nodeCount"] == len(payload["nodes"]) == len(diagram.nodes) - root_nodes,
+        f"stats={payload['stats']['nodeCount']} / nodes={len(payload['nodes'])} / 图节点={len(diagram.nodes)}",
+    )
     check("包含 sections", len(payload["diagram"]["sections"]) >= 5, str(payload["diagram"]["sections"]))
     check("trunkSections 非空", len(payload["diagram"]["trunkSections"]) > 0)
     visible_evidence = sum(bool(node.get("evidence")) for node in payload["nodes"])
@@ -982,7 +1003,7 @@ def test_logging_setup() -> None:
         check("日志最多保留 10 份", len(remaining) == 10, f"实际 {len(remaining)} 份")
         check("删除的是最旧的日志", newest in remaining and all(
             int(p.name.split("_")[-1].split(".")[0]) >= 3 for p in remaining if p != newest
-        ) or newest in remaining)
+        ), f"剩余：{sorted(p.name for p in remaining)}")
 
 
 def test_parse_retry() -> None:
@@ -1053,6 +1074,280 @@ def test_parse_retry() -> None:
         parse_mod.parse_pdf = real
 
 
+def test_heading_guard() -> None:
+    """标题识别守卫：图表刻度 / 公式碎片不得被当成章节标题。
+
+    这两类误判来自真实论文实测：一篇 28 页 arXiv 论文曾产出 167 个"标题"，
+    其中 141 个是 ``1.0`` / ``0.8`` / ``100 101`` 这类坐标轴刻度，另有公式碎片
+    ``t)|0 ≤l ≤ai −1 ...`` 被当成第 5 节。它们字号都大于正文，纯几何规则判不出来。
+    """
+    print("\n[标题识别：拒绝公式碎片与图表刻度]")
+    import src.parse as parse_mod
+    from src.parse import Block
+
+    def block(title: str) -> Block:
+        # 12pt 远大于正文 8.5pt，且居中：几何规则一定会误判，靠语言学守卫生效
+        return Block(page=1, text=title, bbox=(20.0, 100.0, 480.0, 114.0), size=12.0, bold=False)
+
+    accepted = [
+        "1. Introduction",
+        "2. The winning strategy",
+        "5.1 Prior and Episode Structure",
+        "A Derivations and Identifiability of Root Causes",
+        "第 3 章 实验结果",
+        "References",
+    ]
+    rejected = [
+        "1.0",
+        "0.8",
+        "100 101",
+        "20 30 50 80 100 Number of nodes",
+        "t)|0 ≤l ≤ai −1, 1 ≤t ≤m −n}.",
+        "10 1",
+    ]
+    for title in accepted:
+        ok, _ = parse_mod._classify_heading(block(title), 8.5, 20.0, 500.0)
+        check(f"接受真标题：{title[:26]}", ok is True)
+    for title in rejected:
+        ok, _ = parse_mod._classify_heading(block(title), 8.5, 20.0, 500.0)
+        check(f"拒绝伪标题：{title[:26]}", ok is False)
+
+
+def test_reference_truncation_reported() -> None:
+    """参考文献截断后，必须把"漏读了几页"写进 stats 与看板警告。
+
+    实测：一篇 28 页的 arXiv 论文，参考文献在第 11 页，附录（14 页）排在后面，
+    正文只用到 10 页。若不上报，用户会以为 28 页都被读过了。
+    """
+    print("\n[参考文献截断：漏读页数必须显式上报]")
+    import tempfile
+
+    import pymupdf
+
+    from src.parse import parse_pdf
+
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "refs_then_appendix.pdf"
+        doc = pymupdf.open()
+        page = doc.new_page()
+        page.insert_text((50, 80), "1 Introduction", fontsize=16)
+        page.insert_text((50, 110), "Body text before the reference list. " * 20, fontsize=10)
+        page = doc.new_page()
+        page.insert_text((50, 80), "References", fontsize=16)
+        page.insert_text((50, 110), "[1] A. Author. A title. A journal, 2020.", fontsize=9)
+        page = doc.new_page()
+        page.insert_text((50, 80), "Appendix A Proofs", fontsize=16)
+        page.insert_text((50, 110), "Proof material that should not be silently dropped.", fontsize=10)
+        doc.save(str(path))
+        doc.close()
+
+        paper = parse_pdf(path)
+        check("参考文献之后不再进入正文", len(paper.body_pages) == 1, str(paper.body_pages))
+        check("漏读页数写入 stats", paper.stats.get("truncated_pages") == 2, str(paper.stats))
+        check("漏读起始页写入 stats", paper.stats.get("truncated_from") == 2, str(paper.stats))
+        check(
+            "看板警告说明附录未参与分析",
+            any("参考文献" in str(w) and "未参与分析" in str(w) for w in paper.stats.get("warnings", [])),
+            str(paper.stats.get("warnings")),
+        )
+
+
+def test_webapp_template_removed() -> None:
+    """webapp 里那份 130 行死模板必须保持删除状态（它对着早已废弃的 XHR 契约）。"""
+    print("\n[死代码：webapp 不再内嵌过期上传页模板]")
+    import src.webapp as webapp_mod
+
+    check("webapp 不再导出 PAGE_TEMPLATE", not hasattr(webapp_mod, "PAGE_TEMPLATE"))
+    check("上传页仍然从模板文件读取", webapp_mod.UPLOAD_PAGE.exists())
+
+
+def test_settings_and_env() -> None:
+    """配置解析：环境变量类型转换、密钥脱敏、阻塞性问题清单。"""
+    print("\n[配置：环境变量解析与密钥脱敏]")
+    import os as _os
+
+    from src.config import Settings
+
+    keys = (
+        "LLM_API_KEY", "OPENAI_API_KEY", "LLM_BASE_URL", "LLM_MODEL", "LLM_THINKING",
+        "LLM_TEMPERATURE", "LLM_MAX_TOKENS", "LLM_MAX_RETRIES", "LLM_RETRY_BASE_DELAY",
+        "MAX_INPUT_CHARS", "STRICT_CITATION", "MOCK",
+    )
+    saved = {key: _os.environ.get(key) for key in keys}
+    try:
+        _os.environ.pop("OPENAI_API_KEY", None)
+        _os.environ.update(
+            {
+                "LLM_API_KEY": "unit-test-key-1234567890",
+                "LLM_BASE_URL": "https://api.example.com/v1",
+                "LLM_MODEL": "unit-model",
+                "LLM_THINKING": "ENABLED",
+                "LLM_TEMPERATURE": "0.7",
+                "LLM_MAX_TOKENS": "1234",
+                "LLM_MAX_RETRIES": "5",
+                "LLM_RETRY_BASE_DELAY": "0.5",
+                "MAX_INPUT_CHARS": "9000",
+                "STRICT_CITATION": "true",
+                "MOCK": "0",
+            }
+        )
+        settings = Settings.from_env()
+        check("字符串配置被读取", settings.model == "unit-model" and settings.base_url.endswith("/v1"))
+        check("浮点/整数配置被强转", settings.temperature == 0.7 and settings.max_tokens == 1234)
+        check("重试配置被读取", settings.max_retries == 5 and settings.retry_base_delay == 0.5)
+        check("布尔配置识别 true/0", settings.strict_citation is True and settings.mock is False)
+        check("thinking 归一化为小写", settings.thinking == "enabled")
+        check("密钥脱敏只露首尾", settings.masked_key() == "unit...7890", settings.masked_key())
+        check("合法配置无阻塞问题", settings.validate() == [])
+
+        broken = Settings(api_key="", base_url="ftp://x", model="", thinking="maybe")
+        problems = broken.validate()
+        check("缺少密钥被拦下", any("API Key" in p for p in problems), str(problems))
+        check("非法 Base URL 被拦下", any("LLM_BASE_URL" in p for p in problems), str(problems))
+        check("空模型名被拦下", any("LLM_MODEL" in p for p in problems), str(problems))
+        check("非法 thinking 被拦下", any("LLM_THINKING" in p for p in problems), str(problems))
+        check("短密钥全部打码", Settings(api_key="short").masked_key() == "*****")
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                _os.environ.pop(key, None)
+            else:
+                _os.environ[key] = value
+
+
+def test_llm_client_paths() -> None:
+    """真实 API 分支（不联网）：退避重试 / 致命错误 / response_format 降级 / 空返回 / 重问。"""
+    print("\n[大模型客户端：重试 / 致命错误 / 降级 / 重问]")
+    from types import SimpleNamespace
+
+    from src.config import Settings
+    from src.llm import (
+        LLMClient,
+        LLMError,
+        LLMResult,
+        _classify_error,
+        _looks_like_unsupported,
+    )
+
+    class FakeError(Exception):
+        def __init__(self, message: str, status_code: int | None = None):
+            super().__init__(message)
+            if status_code is not None:
+                self.status_code = status_code
+
+    class FakeCompletions:
+        def __init__(self, effects):
+            self.effects = list(effects)
+            self.calls: list[dict] = []
+
+        def create(self, **kwargs):
+            self.calls.append(kwargs)
+            effect = self.effects.pop(0)
+            if isinstance(effect, Exception):
+                raise effect
+            return effect
+
+    class FakeClient:
+        def __init__(self, effects):
+            self.chat = SimpleNamespace(completions=FakeCompletions(effects))
+
+    def response(text: str, total: int = 10):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=text))],
+            usage=SimpleNamespace(prompt_tokens=4, completion_tokens=6, total_tokens=total),
+        )
+
+    def make_client(effects, *, max_retries: int = 2) -> LLMClient:
+        settings = Settings(
+            api_key="sk-unit-test",
+            base_url="https://api.example.invalid/v1",
+            model="unit-model",
+            max_retries=max_retries,
+            retry_base_delay=0.0,  # 测试里不做真实等待
+        )
+        client = LLMClient(settings)
+        client._client = FakeClient(effects)
+        return client
+
+    # 1) 429 两次后成功：应调用 3 次、token 累计
+    client = make_client([FakeError("429 rate limit", 429), FakeError("429 rate limit", 429), response("ok")])
+    result = client.complete("system", "user")
+    check("瞬时错误退避重试后成功", isinstance(result, LLMResult) and result.text == "ok")
+    check("重试次数与配置一致", len(client._client.chat.completions.calls) == 3)
+    check("token 用量累计到客户端", client.total_tokens == 10 and client.call_count == 1)
+
+    # 2) 401 属于确定性失败：立即抛出、不浪费重试
+    client = make_client([FakeError("401 invalid api key", 401), response("never")])
+    raised = ""
+    try:
+        client.complete("system", "user")
+    except LLMError as exc:
+        raised = str(exc)
+    check("401 立即失败不重试", len(client._client.chat.completions.calls) == 1, f"调用 {len(client._client.chat.completions.calls)} 次")
+    check("致命错误附中文修复建议", "API Key" in raised, raised[:80])
+
+    # 3) 服务不支持 response_format：降级为纯文本请求后成功
+    client = make_client(
+        [FakeError("invalid request: response_format is not supported", 400), response('{"ok": 1}')]
+    )
+    data, _ = client.complete_json("system", "user")
+    calls = client._client.chat.completions.calls
+    check("response_format 不支持时降级", data == {"ok": 1})
+    check("降级后不再携带 response_format",
+          "response_format" in calls[0] and "response_format" not in calls[1])
+
+    # 4) 空返回触发重试
+    client = make_client([response("   "), response("补齐内容")])
+    check("空返回触发重试", client.complete("system", "user").text == "补齐内容")
+
+    # 5) 结构校验失败：带错误信息重问一次，并标记 repaired
+    client = make_client([response('{"a": 1}'), response('{"a": 2, "b": 3}')])
+
+    def validate(payload) -> None:
+        if "b" not in payload:
+            raise LLMError("缺少 b 字段")
+
+    data, repaired = client.complete_json("system", "user", validate=validate)
+    check("结构校验失败后自动重问", data.get("b") == 3 and repaired.repaired is True)
+    check("重问请求带上次错误信息", "缺少 b 字段" in client._client.chat.completions.calls[1]["messages"][1]["content"])
+
+    # 6) 错误分类与特性探测
+    check("分类：401→fatal", _classify_error(FakeError("x", 401)) == "fatal")
+    check("分类：429→transient", _classify_error(FakeError("x", 429)) == "transient")
+    check("分类：超时→transient", _classify_error(TimeoutError("timed out")) == "transient")
+    check("分类：未知错误按瞬时处理", _classify_error(RuntimeError("boom")) == "transient")
+    check("识别 response_format 不支持", _looks_like_unsupported(FakeError("unknown parameter: response_format")))
+    check("普通错误不误判为不支持", not _looks_like_unsupported(FakeError("connection reset")))
+
+
+def test_mock_fallback_warning() -> None:
+    """离线兜底到通用样例时，日志与看板都必须说明"内容与本文无关"。"""
+    print("\n[离线兜底：通用样例必须显式告警]")
+    import tempfile
+
+    from src.config import Settings
+    from src.pipeline import Logger, _is_generic_mock_source, run_pipeline
+
+    check("内置占位算通用样例", _is_generic_mock_source("(builtin)"))
+    check("examples/sample_analysis.json 算通用样例",
+          _is_generic_mock_source(str(PROJECT_ROOT / "examples" / "sample_analysis.json")))
+    check("同名配套分析不算通用样例",
+          not _is_generic_mock_source(str(PROJECT_ROOT / "examples" / "sample_en_two_column.analysis.json")))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp) / "mock_fallback.html"
+        result = run_pipeline(
+            PROJECT_ROOT / "examples" / "sample_scan_like.pdf",
+            output,
+            settings=Settings(mock=True),
+            logger=Logger("error"),
+            audience_pass=False,
+        )
+        warnings = result.payload.get("warnings") or []
+        check("通用兜底写进看板 warnings", any("通用样例分析" in str(w) for w in warnings), str(warnings))
+        check("兜底时看板仍可正常打开", output.exists() and output.stat().st_size > 500_000)
+
+
 def main() -> int:
     print("=" * 68)
     print("  单元自测")
@@ -1084,6 +1379,12 @@ def main() -> int:
     test_en_sample_glossary_enriched()
     test_logging_setup()
     test_parse_retry()
+    test_heading_guard()
+    test_reference_truncation_reported()
+    test_webapp_template_removed()
+    test_settings_and_env()
+    test_llm_client_paths()
+    test_mock_fallback_warning()
 
     print()
     print("=" * 68)

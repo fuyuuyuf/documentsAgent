@@ -356,6 +356,16 @@ def run_pipeline(
     if settings.mock:
         source = (client.mock_payload or {}).get("_mock_source", "(builtin)")
         logger.warn(f"离线演示模式（--mock）：不会调用任何大模型 API，导图内容来自 {source}")
+        if _is_generic_mock_source(source):
+            # 实测踩过的坑：对着一篇真实论文开 --mock，会悄悄套用 examples 里的
+            # 通用样例分析，界面看着正常、内容却属于另一篇论文（溯源全红）。
+            # 这里把"内容与本 PDF 无关"显式写进日志与看板，避免被误当成程序出错。
+            generic_warning = (
+                "离线演示使用的是通用样例分析（与本 PDF 无关）：看板内容、页码与证据"
+                "均不对应这篇论文。要看真实分析请去掉 --mock，或用 --mock-file 指定配套分析 JSON。"
+            )
+            warnings.append(generic_warning)
+            logger.warn(generic_warning)
     else:
         logger.step(f"[2/5] 调用大模型分析：{settings.model} @ {settings.base_url}（key={settings.masked_key()}）")
         logger.debug(
@@ -550,6 +560,19 @@ def _paper_pages_payload(paper: PaperText) -> dict:
         if text:
             pages.append({"page": page_no, "text": text})
     return {"pages": pages}
+
+
+def _is_generic_mock_source(source: str) -> bool:
+    """判断离线分析是否来自"与本文无关"的通用兜底样例。
+
+    ``LLMClient._load_mock_payload`` 的兜底顺序里，只有最后两级是通用样例：
+    内置占位数据 ``(builtin)`` 与仓库自带的 ``examples/sample_analysis.json``。
+    命中这两级时，看板内容必然与当前 PDF 无关，必须显式告知用户。
+    """
+    if not source or source == "(builtin)":
+        return True
+    parts = Path(source).parts
+    return len(parts) >= 2 and parts[-1] == "sample_analysis.json" and parts[-2] == "examples"
 
 
 def _default_output(pdf_path: Path, settings: Settings) -> Path:

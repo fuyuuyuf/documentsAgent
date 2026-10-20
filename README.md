@@ -41,9 +41,9 @@ PDF 文本提取  →  大模型结构化分析  →  证据溯源校验  →  M
 | **一键跑通** | 30 | 单条命令 `python src/main.py 论文.pdf` 跑完全程，5 个阶段自动衔接，无任何交互式提问；默认输出到 `outputs/<论文名>.dashboard.html`。另有 `--web` 提供浏览器拖拽上传界面。 |
 | **解析准确** | 25 | ① 只用 PyMuPDF 单一后端，避免多后端差异；② **刻意关闭 `sort=True`**（它跨栏按 y 排序会把双栏论文拆成「左一行、右一行」），改为**列感知重排**：按 x 重叠度分列（重叠超过较窄块宽度 50% 视为同列），列内再按 y 稳定排序；③ 页眉页脚**两层过滤**：块级跨页重复阈值 + 行级统计（解决页脚与正文挤在同一 block 的情况）；④ 标题靠「字号 + 编号模式 + 居中 + 加粗」联合判定，并排除作者 / 单位行与「2.6 个百分点」这类以数字开头的句子；⑤ 多块拼成的标题会合并，碎片不再污染大纲；⑥ 正文在参考文献 / 附录处截断。 |
 | **看板可用** | 20 | ① Mermaid **不由模型产出**，由 `build_diagram()` 按十大分区确定性拼装；② 生成前 `validate_mermaid()` 静态校验（首行类型、subgraph 闭合、括号引号配平、节点 id 合法性）；③ `mermaid.min.js` **整体内联**进 HTML，断网可用；④ 节点详情、缩放、折叠、搜索、导出、主题切换。 |
-| **内容深度** | 20 | ① 每个节点携带 `evidence`（原文摘录）+ `page`（页码）+ `section`（所属章节）；② `src/verify.py` 用「精确匹配 → 压缩空白连字符匹配 → 最长片段匹配」三级策略把每条引用**回查原文**，命中就用实测页码覆盖模型自报页码并附带**命中位置的简要上下文**（详情面板可折叠展示），未命中在前端显式标红；③ Prompt 强制六要素 + 五维批判；④ 独立第二轮调用生成通俗解读。 |
+| **内容深度** | 20 | ① 每个节点携带 `evidence`（原文摘录）+ `page`（页码）+ `section`（所属章节）；② `src/verify.py` 用「精确匹配 → 压缩空白连字符匹配 → 片段覆盖匹配 → 中文 k-mer 覆盖率兜底」四级策略把每条引用**回查原文**，命中就用实测页码覆盖模型自报页码并附带**命中位置的简要上下文**（详情面板可折叠展示），未命中在前端显式标红；③ Prompt 强制六要素 + 五维批判；④ 独立第二轮调用生成通俗解读。 |
 | **稳定鲁棒** | 15 | ① 全链路异常处理：溯源模块异常退回内置实现、通俗解读失败不阻断主流程；② Mermaid 三级兜底：校验通过 → 规则修复 → 大模型修复 → 保留代码并启用前端兜底视图；③ 大模型 JSON 解析三级降级，结构校验失败自动带错误信息重问一次；④ 不支持 `response_format` 的服务自动降级重试；⑤ 对近扫描件与乱序内容流有专项样例，只降级不崩溃。 |
-| **工程规范** | 10 | ① 密钥只从环境变量 / `.env` 读取，源码无硬编码，日志只打印 `abcd...wxyz`；② `.env.example` 覆盖全部 15 个变量并含五家服务商预设；③ 异常统一转成带修复建议的中文提示；④ `--check` 一键自检；⑤ README 覆盖比赛要求的全部 8 项，另附独立故障排查文档。 |
+| **工程规范** | 10 | ① 密钥只从环境变量 / `.env` 读取，源码无硬编码，日志只打印 `abcd...wxyz`；② `.env.example` 覆盖全部 16 个变量并含五家服务商预设；③ 异常统一转成带修复建议的中文提示；④ `--check` 一键自检；⑤ README 覆盖比赛要求的全部 8 项，另附独立故障排查文档。 |
 
 ### 一个关键设计决定：为什么不让模型直接写 Mermaid
 
@@ -89,13 +89,16 @@ Project1/                           # 项目根目录（所有命令都在此目
 │   ├── sample_en_two_column.analysis.json
 │   ├── sample_zh_single_column.json
 │   └── sample_analysis.json
-├── outputs/                        # 生成的 HTML 看板（含两份示例产物）
+├── outputs/                        # 生成的 HTML 看板（含两份示例产物，已随仓库提交）
 ├── tests/
 │   ├── test_units.py               # 单元测试
 │   ├── webapp_smoke.py             # 网页上传、进度与看板联动测试
 │   ├── smoke_test.py               # 端到端冒烟测试（现场生成 PDF 跑全链路）
-│   ├── frontend_check.js           # 前端无头验证（jsdom 真实执行产物 HTML，37 项）
+│   ├── frontend_check.js           # 前端无头验证（jsdom 真实执行产物 HTML，79 项）
 │   └── run_all_tests.py            # 一键跑完全部自测
+├── _verify/
+│   └── package.json                # 前端无头验证的依赖声明（jsdom；node_modules 不入库）
+├── .github/workflows/tests.yml     # CI：push / PR 自动跑全量自测
 ├── tools/
 │   └── fetch_mermaid.py            # 一次性下载 mermaid.min.js
 ├── docs/
@@ -118,7 +121,7 @@ Project1/                           # 项目根目录（所有命令都在此目
 | Python | **≥ 3.10**（开发与验证于 3.14.6） | 用到 `X \| Y` 类型标注与 `dataclass` |
 | 操作系统 | Windows / macOS / Linux | 仅在 Windows + Python 3.14 上完整验证过 |
 | 网络 | **仅首次准备环境与调用 API 时需要** | 产物看板与全部测试完全离线 |
-| Node.js | 可选（≥ 18） | 仅用于运行 `tests/frontend_check.js` 前端无头验证 |
+| Node.js | 可选（≥ 18） | 仅用于 `tests/frontend_check.js`。依赖声明在 `_verify/package.json`，`tests/run_all_tests.py` 首次运行会自动 `npm install`（约 10 MB，仅一次）；完全离线时可加 `--no-install` 跳过 |
 | 大模型 API | 需要一个 OpenAI 兼容接口 | DeepSeek / Kimi / 通义 / 智谱 / Ollama 均可 |
 
 三个 Python 依赖：
@@ -388,7 +391,8 @@ python src/main.py 论文.pdf -q
    ▼
 ③  证据溯源校验              src/verify.py（+ textutils.CitationVerifier）
    · 不信模型自报页码：每条 evidence 都回原文回查
-   · 三级策略：规范化精确匹配 → 压缩空白/连字符匹配 → 最长片段匹配
+   · 四级策略：规范化精确匹配 → 压缩空白/连字符匹配 → 片段覆盖匹配 → 中文 k-mer 覆盖率兜底
+     （最后一级专治"多分句引用里被轻微改写"的情况；实测中文政策论文的 3 条误杀由此救回）
    · 命中 → 用实测页码覆盖模型填的页码；未命中 → 前端标注"未在原文定位到"
    · STRICT_CITATION=true 时，未定位到的引用直接清空
    · 返回 VerificationReport：总条数/已溯源/未定位/页码纠正/占位清空/可疑明细
@@ -427,6 +431,7 @@ python src/main.py 论文.pdf -q
 python src/main.py --check
 
 # 步骤 2：一键跑完全部自测（单元 + 网页联动 + 前端无头 + 环境自检）
+#         首次运行会自动 npm install jsdom（约 10 MB）；完全离线时加 --no-install
 python tests/run_all_tests.py
 #        Windows 也可以用：powershell -ExecutionPolicy Bypass -File run_tests.ps1
 
@@ -435,6 +440,9 @@ python src/main.py examples/sample_en_two_column.pdf --mock
 python src/main.py examples/sample_zh_single_column.pdf --mock
 
 # 步骤 4：换成你手边的任意文字版 PDF，先离线跑一遍看解析与看板
+#         注意：若该 PDF 没有同名 .analysis.json，会回落到通用样例，
+#         看板内容与本文无关、证据溯源全部标红 —— 这是预期的"离线演示"行为，
+#         日志与看板顶部都会明确提示。要跑真实分析请去掉 --mock。
 python src/main.py 你的论文.pdf --mock --keep-debug
 
 # 步骤 5（可选）：配好 .env 后真实调用大模型
@@ -446,7 +454,7 @@ python src/main.py 你的论文.pdf -v
 ```bash
 python tests/test_units.py                                                  # 单元测试
 python tests/smoke_test.py                                                  # 冒烟测试（现场生成 PDF 跑全链路）
-node tests/frontend_check.js outputs/sample_en_two_column.dashboard.html     # 前端无头验证（37 项）
+node tests/frontend_check.js outputs/sample_en_two_column.dashboard.html     # 前端无头验证（79 项）
 ```
 
 步骤 2 的期望结尾：
@@ -455,14 +463,21 @@ node tests/frontend_check.js outputs/sample_en_two_column.dashboard.html     # �
 ======================================================================
   汇总
 ======================================================================
-  ✓ 单元自测
+  ✓ 单元自测                                          （284 项断言）
+  ✓ 双栏版式解析测试
   ✓ 端到端冒烟测试（离线 mock）
-  ✓ 前端无头验证（jsdom）
+  ✓ 本地网页上传与任务进度
+  ✓ 前端无头验证（jsdom）                              （79 项）
   ✓ 环境自检
+  ✓ 开发环境交付检查（清单 / 密钥 / 离线自证 / 编码）
+----------------------------------------------------------------------
+  总耗时：13.8 秒
 
   全部自测通过。产物：outputs/*.dashboard.html（单文件，可离线打开）
 ======================================================================
 ```
+
+> 没有安装 jsdom 时，前端一项会显示 `○ 前端无头验证（jsdom）（skipped）` 并在结尾提示启用方式——**跳过不会被伪装成通过**。
 
 步骤 3 的期望结尾（样例论文的引用摘录逐字取自该论文，因此溯源全部命中）：
 
@@ -471,7 +486,7 @@ node tests/frontend_check.js outputs/sample_en_two_column.dashboard.html     # �
   证据溯源    : 33/33 条已定位，7 条页码已纠正
   Mermaid     : Mermaid 语法预校验通过
   输出看板    : outputs/sample_en_two_column.dashboard.html
-  文件大小    : 3362 KB（单文件，含离线 Mermaid，可直接双击打开）
+  文件大小    : 3472 KB（单文件，含离线 Mermaid，可直接双击打开）
 ```
 
 打开看板后请确认三件事：① 显示思维导图而非白屏；② 点击节点后右侧出现「原文摘录 / 页码 / 溯源状态」；③ **断网刷新后导图依然正常渲染**。
@@ -495,6 +510,7 @@ python src/main.py 论文.pdf --mock --mock-file examples/sample_analysis.json
   3. `examples/sample_analysis.json`（仓库自带的通用兜底）；
   4. `src/llm.py::_builtin_analysis` 内置占位样例；
 - 仓库自带两份与样例论文配套的分析 JSON（英文、中文各一份），其 `evidence` 摘录**逐字取自对应论文**，所以溯源校验能全部命中 —— 这是演示「证据溯源 + 反幻觉」链路的关键；
+- 一旦回落到第 3/4 级通用兜底，**看板内容必然与当前 PDF 无关**：日志与看板的 `warnings` 会明确写出「离线演示使用的是通用样例分析（与本 PDF 无关）」，此时证据会全部标红。这是预期行为，不是程序出错；要分析真实内容请去掉 `--mock`，或用 `--mock-file` 指定配套 JSON。
 - 看板顶部会明确显示**离线演示模式**，**不会**把样例内容伪装成真实分析结果。
 
 适用场景：装完依赖后先验证解析 / 渲染链路；评委现场断网演示时完整展示整条链路与看板交互；改完前端后做零成本回归。
@@ -583,7 +599,7 @@ for f in papers/*.pdf; do python src/main.py "$f" -o "outputs/$(basename "$f" .p
 ```
 
 **Q12：改了代码怎么确认没改坏？**
-跑 `python tests/run_all_tests.py`（约 15 秒，零 API 成本），它会依次跑单元测试、端到端冒烟、前端无头验证与环境自检。
+跑 `python tests/run_all_tests.py`（约 14 秒，零 API 成本），它会依次跑单元测试、双栏版式专项、端到端冒烟、网页联动、前端无头验证、环境自检与交付检查。首次运行会自动 `npm install jsdom`（约 10 MB，仅一次）；完全离线时加 `--no-install`，前端层会标记为「跳过」而不是失败。
 
 **Q13：`.env` 会不会被打进提交包？**
 `.env` 已在 `.gitignore` 中排除。打包提交前请再确认一次压缩包里**没有** `.env`，只有 `.env.example`。
@@ -593,6 +609,12 @@ for f in papers/*.pdf; do python src/main.py "$f" -o "outputs/$(basename "$f" .p
 
 **Q15：程序会不会把我论文内容发到别处？**
 不会。除了发送给你自己配置的大模型接口外，没有任何其他网络请求；生成的 HTML 也不含任何外链。
+
+**Q16：为什么 28 页的论文只分析了 10 页？**
+正文会在「参考文献 / 附录」标题处截断，避免参考文献列表污染分析。若论文的附录排在参考文献**之后**（arXiv 论文常见），这部分暂不进入看板：日志与看板的 `warnings` 会写明「第 N 页起共 M 页未参与分析」，`--keep-debug` 的 `05_body.txt` 可确认截断位置。这是已知限制，不是解析失败。
+
+**Q17：日志里的「标题 167 个」正常吗？**
+不正常时会被自动拦掉。图表坐标轴刻度（`1.0` / `0.8` / `100 101`）与公式碎片字号常大于正文，早期版本会把它们当成章节标题（实测一篇 28 页论文产出 167 个"标题"）。现在标题识别有语言学守卫（字母占比、括号配平、纯数字 token 数），同类论文只保留 25 个真实标题。
 
 ---
 

@@ -29,6 +29,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote
 
+from . import __version__ as VERSION
 from .config import PROJECT_ROOT, Settings
 from .llm import LLMError
 from .pipeline import Logger, run_pipeline
@@ -60,140 +61,8 @@ def _safe_filename(name: str, fallback: str = "paper.pdf") -> str:
     return base[:120]
 
 
-PAGE_TEMPLATE = """<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>文档解析智能体 · 上传论文</title>
-<style>
-  :root {{ --bg:#f5f6fa; --panel:#fff; --border:#e2e5ee; --text:#1f2430; --dim:#6b7280; --accent:#4f46e5;
-           --sans:"PingFang SC","Microsoft YaHei",system-ui,sans-serif; }}
-  * {{ box-sizing:border-box; }}
-  body {{ margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg);
-          color:var(--text); font-family:var(--sans); padding:24px; }}
-  .card {{ background:var(--panel); border:1px solid var(--border); border-radius:16px; padding:32px 36px;
-           width:min(680px,100%); box-shadow:0 8px 30px rgba(16,24,40,.08); }}
-  h1 {{ margin:0 0 6px; font-size:21px; }}
-  p.sub {{ margin:0 0 22px; color:var(--dim); font-size:14px; }}
-  .drop {{ border:2px dashed var(--border); border-radius:12px; padding:38px 20px; text-align:center;
-           cursor:pointer; transition:.18s; background:#fafbfd; }}
-  .drop:hover, .drop.over {{ border-color:var(--accent); background:#eef2ff; }}
-  .drop strong {{ display:block; font-size:16px; margin-bottom:6px; }}
-  .drop span {{ color:var(--dim); font-size:13px; }}
-  input[type=file] {{ display:none; }}
-  .row {{ margin-top:18px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }}
-  button {{ font-family:inherit; font-size:14px; padding:9px 18px; border-radius:9px; cursor:pointer;
-            border:1px solid var(--border); background:#fafbfd; }}
-  button.primary {{ background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }}
-  button:disabled {{ opacity:.5; cursor:not-allowed; }}
-  .fname {{ color:var(--dim); font-size:13px; }}
-  pre.log {{ margin-top:18px; background:#1c1f27; color:#d8dee9; padding:14px; border-radius:10px;
-             font-size:12px; max-height:260px; overflow:auto; white-space:pre-wrap; display:none; }}
-  .msg {{ margin-top:16px; padding:12px 14px; border-radius:10px; font-size:14px; display:none; }}
-  .msg.ok {{ background:#ecfdf5; border:1px solid #6ee7b7; }}
-  .msg.err {{ background:#fef2f2; border:1px solid #fca5a5; }}
-  label.chk {{ font-size:13px; color:var(--dim); display:flex; align-items:center; gap:6px; }}
-</style></head>
-<body>
-<div class="card">
-  <h1>论文 → 交互式思维导图看板</h1>
-  <p class="sub">拖入一篇 PDF 论文，自动完成文本提取、结构化分析、导图生成与看板渲染。</p>
-  <form id="form" method="post" action="/generate" enctype="multipart/form-data">
-    <label class="drop" id="drop">
-      <strong>把 PDF 拖到这里，或点击选择文件</strong>
-      <span>支持文字版 PDF；扫描件需要先做 OCR　·　上限 64 MB</span>
-      <input type="file" id="file" name="pdf" accept="application/pdf,.pdf"/>
-    </label>
-    <div class="row">
-      <button type="submit" class="primary" id="submit">开始生成</button>
-      <span class="fname" id="fname">未选择文件</span>
-    </div>
-    <div class="row">
-      <label class="chk"><input type="checkbox" name="mock" value="1"/> 离线演示模式（不调用大模型，不产生费用）</label>
-      <label class="chk"><input type="checkbox" name="keep_debug" value="1"/> 导出中间产物</label>
-    </div>
-    <pre class="log" id="log"></pre>
-  </form>
-  <div class="msg" id="msg"></div>
-</div>
-<script>
-(function () {{
-  'use strict';
-  var drop = document.getElementById('drop');
-  var input = document.getElementById('file');
-  var fname = document.getElementById('fname');
-  var form = document.getElementById('form');
-  var submit = document.getElementById('submit');
-  var msg = document.getElementById('msg');
-  var log = document.getElementById('log');
-
-  function show(el) {{ el.style.display = 'block'; }}
-  function setName() {{
-    fname.textContent = input.files && input.files.length ? input.files[0].name : '未选择文件';
-  }}
-  input.addEventListener('change', setName);
-  ['dragenter', 'dragover'].forEach(function (evt) {{
-    drop.addEventListener(evt, function (e) {{ e.preventDefault(); drop.classList.add('over'); }});
-  }});
-  ['dragleave', 'drop'].forEach(function (evt) {{
-    drop.addEventListener(evt, function (e) {{ e.preventDefault(); drop.classList.remove('over'); }});
-  }});
-  drop.addEventListener('drop', function (e) {{
-    if (e.dataTransfer && e.dataTransfer.files.length) {{
-      input.files = e.dataTransfer.files;
-      setName();
-    }}
-  }});
-
-  form.addEventListener('submit', function (e) {{
-    e.preventDefault();
-    if (!input.files || !input.files.length) {{
-      msg.className = 'msg err'; msg.textContent = '请先选择一篇 PDF 论文。'; show(msg);
-      return;
-    }}
-    submit.disabled = true;
-    submit.textContent = '生成中…（长论文可能需要 1-3 分钟）';
-    msg.style.display = 'none';
-    log.textContent = '正在上传并解析，请稍候…\\n';
-    show(log);
-
-    var data = new FormData(form);
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '/generate', true);
-    xhr.onload = function () {{
-      submit.disabled = false;
-      submit.textContent = '开始生成';
-      var res = null;
-      try {{ res = JSON.parse(xhr.responseText); }} catch (err) {{ res = null; }}
-      if (xhr.status === 200 && res && res.ok) {{
-        log.textContent += res.log || '';
-        msg.className = 'msg ok';
-        msg.innerHTML = '生成成功，正在打开看板：<a href="' + res.url + '" target="_blank">' + res.html + '</a>';
-        show(msg);
-        window.open(res.url, '_blank');
-      }} else {{
-        log.textContent += (res && res.log) || xhr.responseText || '';
-        msg.className = 'msg err';
-        msg.textContent = (res && res.error) ? res.error : ('生成失败（HTTP ' + xhr.status + '）');
-        show(msg);
-      }}
-    }};
-    xhr.onerror = function () {{
-      submit.disabled = false;
-      submit.textContent = '开始生成';
-      msg.className = 'msg err';
-      msg.textContent = '网络错误：无法连接到本地服务，请确认终端里的进程还在运行。';
-      show(msg);
-    }};
-    xhr.send(data);
-  }});
-}})();
-</script>
-</body></html>
-"""
-
-
 class Handler(BaseHTTPRequestHandler):
-    server_version = "DocParserAgent/1.0"
+    server_version = "DocParserAgent/1.1"
     protocol_version = "HTTP/1.1"
 
     # ------------------------------------------------------------ 工具
@@ -225,7 +94,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send_html(200, UPLOAD_PAGE.read_text(encoding="utf-8"))
             return
         if path == "/health":
-            self._send_json(200, {"ok": True, "version": "1.0.0"})
+            self._send_json(200, {"ok": True, "version": VERSION})
             return
         if path == "/api/config":
             settings = Settings.from_env()

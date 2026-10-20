@@ -23,7 +23,7 @@ if __package__ in (None, ""):
 from src.bootstrap import _force_utf8_stdout, _stdin_is_tty  # noqa: E402
 from src.config import PROJECT_ROOT, Settings  # noqa: E402
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 BANNER = r"""
   文档解析智能体 · 论文阅读助手

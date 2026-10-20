@@ -68,8 +68,13 @@ def main() -> int:
             raise AssertionError("网页任务超时")
 
         assert state["status"] == "done", state.get("error") or state.get("log", "")[-400:]
-        assert state["stats"]["verifiedCount"] == 33
-        assert state["page_count"] == 6
+        # 断言"全部证据都溯源命中"，但不写死数字：改样例 PDF / 分析 JSON 时不该碎
+        assert state["stats"]["verifiedCount"] == state["stats"]["evidenceCount"] > 0, state["stats"]
+        assert state["stats"]["unverifiedCount"] == 0, state["stats"]
+        import pymupdf
+
+        with pymupdf.open(PROJECT_ROOT / "examples" / "sample_en_two_column.pdf") as doc:
+            assert state["page_count"] == doc.page_count
         assert state["url"].startswith("/view/")
         _, dashboard = read(state["url"])
         assert b'id="payload"' in dashboard and len(dashboard) > 2_000_000

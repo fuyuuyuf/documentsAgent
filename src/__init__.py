@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 from .bootstrap import check_environment, ensure_ready  # 纯标准库，缺依赖时也可用
 from .config import Settings  # noqa: E402 纯标准库，缺依赖时也可用
