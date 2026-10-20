@@ -51,8 +51,13 @@ _SAFE_NAME_RE = re.compile(r"[^0-9A-Za-z\u4e00-\u9fff._-]+")
 
 
 def _safe_filename(name: str, fallback: str = "paper.pdf") -> str:
-    """把上传的文件名清洗成安全的 basename，防路径穿越。"""
-    base = Path(unquote(name or "")).name
+    """把上传的文件名清洗成安全的 basename，防路径穿越。
+
+    Windows 客户端可能传来 ``..\\..\\evil.pdf``；POSIX 上反斜杠不是路径分隔符，
+    直接 ``Path(...).name`` 会把它原样留下，导致"同一份上传在 Linux 上不清洗"。
+    先统一成正斜杠再取 basename，保证跨平台行为一致。
+    """
+    base = Path(unquote(name or "").replace("\\", "/")).name
     base = _SAFE_NAME_RE.sub("_", base).strip("._-")
     if not base:
         return fallback
